@@ -1,0 +1,160 @@
+version: '3.8'
+
+services:
+  # Backend Laravel Service
+  backend:
+    platform: linux/amd64
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: ${PROJECT_NAME}_laravel_app
+    restart: unless-stopped
+    ports:
+      - "${PHP_PORT}:9000"
+    volumes:
+      - ./backend:/var/www/html
+      - /var/www/html/vendor
+      - ./docker/php/php.ini:/usr/local/etc/php/conf.d/local.ini
+      - ./.env:/var/www/html/.env
+
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - app_network
+    environment:
+      - DB_CONNECTION=${DB_CONNECTION}
+      - DB_HOST=${DB_HOST}
+      - DB_PORT=${DB_PORT}
+      - DB_DATABASE=${DB_NAME}
+      - DB_USERNAME=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - BACKEND_HOST=${BACKEND_HOST}
+      - BACKEND_PORT=${BACKEND_PORT}
+
+  # Frontend Next.js Service
+  frontend:
+    platform: linux/amd64
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: ${PROJECT_NAME}_nextjs_app
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT}:${FRONTEND_PORT}"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    networks:
+      - app_network
+    environment:
+      - NEXT_PUBLIC_API_URL=http://${BACKEND_HOST}:${BACKEND_PORT}/api
+      - NODE_ENV=development
+      - PORT=${FRONTEND_PORT}
+    command: >
+      bun run dev -- -p ${FRONTEND_PORT}
+
+  # Nginx Service
+  nginx:
+    platform: linux/amd64
+    image: nginx:alpine
+    container_name: ${PROJECT_NAME}_nginx
+    restart: unless-stopped
+    ports:
+      - "${BACKEND_PORT}:80"
+    volumes:
+      - ./backend:/var/www/html
+      - ./docker/nginx:/etc/nginx/conf.d
+    depends_on:
+      - backend
+    networks:
+      - app_network
+
+  # PostgreSQL Service
+  db:
+    platform: linux/amd64
+    image: postgres:15-alpine
+    container_name: ${PROJECT_NAME}_postgres_db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=${DB_NAME}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    ports:
+      - "${POSTGRES_PORT}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${DB_NAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - app_network
+
+  # pgAdmin Service
+  pgadmin:
+    platform: linux/amd64
+    image: dpage/pgadmin4
+    container_name: ${PROJECT_NAME}_pgadmin
+    restart: unless-stopped
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=${PGADMIN_EMAIL}
+      - PGADMIN_DEFAULT_PASSWORD=${PGADMIN_PASSWORD}
+    ports:
+      - "${PGADMIN_WEB_PORT}:80"
+    depends_on:
+      - db
+    networks:
+      - app_network
+
+  # Redis Service
+  redis:
+    platform: linux/amd64
+    image: redis:alpine
+    container_name: ${PROJECT_NAME}_redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_LOCAL_PORT}:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - app_network
+
+  # Redis Commander (Redis GUI)
+  redis-commander:
+    platform: linux/amd64
+    image: rediscommander/redis-commander:latest
+    container_name: ${PROJECT_NAME}_redis_commander
+    restart: unless-stopped
+    ports:
+      - "${REDIS_COMMANDER_WEB_PORT}:8081"
+    environment:
+      - REDIS_HOSTS=local:redis:6379
+    depends_on:
+      - redis
+    networks:
+      - app_network
+
+  # MailHog Service
+  mailhog:
+    image: mailhog/mailhog
+    container_name: ${PROJECT_NAME}_mailhog
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+    networks:
+      - app_network
+
+networks:
+  app_network:
+    driver: bridge
+    name: ${PROJECT_NAME}-network
+    external: false
+
+volumes:
+  postgres_data:
+    name: ${PROJECT_NAME}_postgres_data
+  redis_data:
+    name: ${PROJECT_NAME}_redis_data
